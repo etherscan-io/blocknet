@@ -1362,6 +1362,7 @@ xbridge::Error App::sendXBridgeTransaction(const std::string & from,
                                            const std::string & to,
                                            const std::string & toCurrency,
                                            const uint64_t & toAmount,
+                                           const bool & partialOrder,
                                            uint256 & id,
                                            uint256 & blockHash)
 {
@@ -1548,6 +1549,9 @@ xbridge::Error App::sendXBridgeTransaction(const std::string & from,
     ptr->blockHash    = blockHash;
     ptr->role         = 'A';
 
+    if (partialOrder)
+        ptr->allowPartialOrders();
+
     {
         UniValue log_obj(UniValue::VOBJ);
         log_obj.pushKV("orderid", id.GetHex());
@@ -1653,6 +1657,8 @@ bool App::Impl::sendPendingTransaction(const TransactionDescrPtr & ptr)
         packet->append(entry.rawAddress);
         packet->append(entry.signature);
     }
+
+    packet->append(uint16_t(ptr->isPartialOrderAllowed()));
 
     packet->sign(ptr->mPubKey, ptr->mPrivKey);
 
@@ -1903,6 +1909,299 @@ Error App::acceptXBridgeTransaction(const uint256     & id,
             }
         }
 
+       std::cout << "Selected Order: " << ptr->id.ToString() << std::endl;
+       for (const auto & utxo : outputsForUse)
+           std::cout << "    Selected: " << utxo.txId << " " << utxo.vout << std::endl;
+        ptr->usedCoins = outputsForUse;
+
+        // lock used coins
+        if (!lockCoins(connFrom->currency, ptr->usedCoins)) {
+            ptr->state = priorState;
+            ERR() << "failed to create order, cannot reuse utxo inputs for " << connFrom->currency
+                  << " across multiple orders " << __FUNCTION__;
+            return xbridge::Error::INSIFFICIENT_FUNDS;
+        }
+    }
+
+    ptr->fromAddr  = from;
+    ptr->from      = connFrom->toXAddr(from);
+    ptr->toAddr    = to;
+    ptr->to        = connTo->toXAddr(to);
+    ptr->role      = 'B';
+
+    // m key
+    connTo->newKeyPair(ptr->mPubKey, ptr->mPrivKey);
+    assert(ptr->mPubKey.size() == 33 && "bad pubkey size");
+
+#ifdef LOG_KEYPAIR_VALUES
+    TXLOG() << "generated M keypair for order " << ptr->id.ToString() << std::endl <<
+             "    pub    " << HexStr(ptr->mPubKey) << std::endl <<
+             "    pub id " << HexStr(connTo->getKeyId(ptr->mPubKey)) << std::endl <<
+             "    priv   " << HexStr(ptr->mPrivKey);
+#endif
+
+    // Add destination address
+    updateConnector(connFrom, ptr->from, ptr->fromCurrency);
+    updateConnector(connTo, ptr->to, ptr->toCurrency);
+
+    // try send immediatelly
+    m_p->sendAcceptingTransaction(ptr);
+
+//    LOG() << "accept transaction " << to_str(ptr->id) << std::endl
+//          << "    from " << from << " (" << to_str(ptr->from) << ")" << std::endl
+//          << "             " << ptr->fromCurrency << " : " << ptr->fromAmount << std::endl
+//          << "    from " << to << " (" << to_str(ptr->to) << ")" << std::endl
+//          << "             " << ptr->toCurrency << " : " << ptr->toAmount << std::endl;
+
+    LOG() << "order accepted" << ptr << __FUNCTION__;
+
+    return xbridge::Error::SUCCESS;
+}
+
+//******************************************************************************
+//******************************************************************************
+Error App::acceptXBridgePartialTransaction(const uint256      & id,
+                                            const std::string & from,
+                                            const std::string & to,
+                                            const uint64_t    & makerSize, 
+                                            const uint64_t    & takerSize
+                                            )
+{
+    TransactionDescrPtr ptr;
+    // TODO checkAcceptPrams can't be used after swap: uncovered bug, fix in progress (due to swap changing to/from)
+//    const auto res = checkAcceptParams(id, ptr, from);
+//    if(res != xbridge::SUCCESS)
+//    {
+//        return res;
+//    }
+
+    {
+        LOCK(m_p->m_txLocker);
+        if (!m_p->m_transactions.count(id))
+        {
+
+            WARN() << "transaction not found " << __FUNCTION__;
+            return xbridge::TRANSACTION_NOT_FOUND;
+        }
+        ptr = m_p->m_transactions[id];
+    }
+
+    if (ptr->state >= TransactionDescr::trAccepting) {
+        WARN() << strprintf("not accepting, transaction %s already accepted ", id.ToString());
+        return xbridge::BAD_REQUEST;
+    }
+    const auto priorState = ptr->state;
+    ptr->state = TransactionDescr::trAccepting;
+
+    ptr->fromAmount = makerSize;
+    ptr->toAmount = takerSize;
+
+    WalletConnectorPtr connFrom = connectorByCurrency(ptr->fromCurrency);
+    WalletConnectorPtr connTo   = connectorByCurrency(ptr->toCurrency);
+    bool nowalletswitch = gArgs.GetBoolArg("-dxnowallets", false);
+    if ((!connFrom || !connTo) && !nowalletswitch)
+    {
+        ptr->state = priorState;
+        // no session
+        WARN() << "no wallet session for <" << (connFrom ? ptr->fromCurrency : ptr->toCurrency) << "> " << __FUNCTION__;
+        return xbridge::NO_SESSION;
+    }
+
+    // check dust
+    if (connFrom->isDustAmount(static_cast<double>(ptr->fromAmount) / TransactionDescr::COIN))
+    {
+        ptr->state = priorState;
+        return xbridge::Error::DUST;
+    }
+    if (connTo->isDustAmount(static_cast<double>(ptr->toAmount) / TransactionDescr::COIN))
+    {
+        ptr->state = priorState;
+        return xbridge::Error::DUST;
+    }
+
+    if (availableBalance() < connTo->serviceNodeFee)
+    {
+        ptr->state = priorState;
+        return xbridge::Error::INSIFFICIENT_FUNDS_DX;
+    }
+
+    // service node pub key
+    ::CPubKey pksnode;
+    {
+        uint32_t len = ptr->sPubKey.size();
+        if (len != 33) {
+            ptr->state = priorState;
+            LOG() << "bad service node public key, len " << len << " " << __FUNCTION__;
+            return xbridge::Error::NO_SERVICE_NODE;
+        }
+        pksnode.Set(ptr->sPubKey.begin(), ptr->sPubKey.end());
+    }
+    // Get servicenode collateral address
+    CKeyID snodeCollateralAddress;
+    {
+        sn::ServiceNode snode = sn::ServiceNodeMgr::instance().getSn(pksnode);
+        if (snode.isNull())
+        {
+            // try to uncompress pubkey and search
+            if (pksnode.Decompress())
+            {
+                snode = sn::ServiceNodeMgr::instance().getSn(pksnode);
+            }
+            if (snode.isNull())
+            {
+                ptr->state = priorState;
+                // bad service node, no more
+                LOG() << "unknown service node pubkey " << pksnode.GetID().ToString() << " " << __FUNCTION__;
+                return xbridge::Error::NO_SERVICE_NODE;
+            }
+        }
+
+        snodeCollateralAddress = snode.getPaymentAddress();
+
+        LOG() << "use service node " << HexStr(snode.getSnodePubKey()) << " " << __FUNCTION__;
+    }
+
+    // transaction info
+    size_t maxBytes = nMaxDatacarrierBytes-3;
+
+    json_spirit::Array info;
+    info.push_back("");
+    info.push_back(ptr->fromCurrency);
+    info.push_back(ptr->fromAmount);
+    info.push_back(ptr->toCurrency);
+    info.push_back(ptr->toAmount);
+    std::string strInfo = write_string(json_spirit::Value(info));
+    info.erase(info.begin());
+
+    // Truncate the order id in situations where we don't have enough space in the tx
+    std::string orderId{ptr->id.GetHex()};
+    if (strInfo.size() + orderId.size() > maxBytes) {
+        auto leftOver = maxBytes - strInfo.size();
+        orderId.erase(leftOver, std::string::npos);
+    }
+    info.insert(info.begin(), orderId); // add order id to the front
+    strInfo = write_string(json_spirit::Value(info));
+    if (strInfo.size() > maxBytes) { // make sure we're not too large
+        ptr->state = priorState;
+        return xbridge::Error::INVALID_ONCHAIN_HISTORY;
+    }
+
+    auto destScript = GetScriptForDestination(CTxDestination(snodeCollateralAddress));
+    auto data = ToByteVector(strInfo);
+
+    // Utxo selection
+    {
+        LOCK(m_utxosOrderLock);
+
+        // BLOCK available p2pkh utxos
+        std::vector<wallet::UtxoEntry> feeOutputs;
+        if (!rpc::unspentP2PKH(feeOutputs)) {
+            ptr->state = priorState;
+            WARN() << "insufficient BLOCK funds for service node fee payment " << __FUNCTION__;
+            return xbridge::Error::INSIFFICIENT_FUNDS;
+        }
+
+        // Exclude the used uxtos
+        auto excludedUtxos = getAllLockedUtxos(connFrom->currency);
+
+        // Exclude utxos matching fee inputs
+        feeOutputs.erase(
+            std::remove_if(feeOutputs.begin(), feeOutputs.end(), [&excludedUtxos](const xbridge::wallet::UtxoEntry & u) {
+                return excludedUtxos.count(u);
+            }),
+            feeOutputs.end()
+        );
+
+        double blockFeePerByte = 40 / static_cast<double>(COIN);
+        if (!rpc::createFeeTransaction(destScript, connFrom->serviceNodeFee, blockFeePerByte,
+                data, feeOutputs, ptr->feeUtxos, ptr->rawFeeTx))
+        {
+            ptr->state = priorState;
+            ERR() << "Failed to take order, couldn't prepare the service node fee " << __FUNCTION__;
+            return xbridge::Error::INSIFFICIENT_FUNDS;
+        }
+
+        // Lock the fee utxos
+        lockFeeUtxos(ptr->feeUtxos);
+
+        // Exclude the used uxtos
+        excludedUtxos = getAllLockedUtxos(connFrom->currency);
+
+//        std::cout << "All utxos: " << outputs.size() << std::endl;
+//        std::cout << "Exclude utxos: " << excludeUtxos.size() << std::endl;
+//        for (const auto & utxo : excludeUtxos)
+//            std::cout << "    Exclude: " << utxo.txId << " " << utxo.vout << std::endl;
+
+        // Available utxos from from wallet
+        std::vector<wallet::UtxoEntry> outputs;
+        connFrom->getUnspent(outputs, excludedUtxos);
+
+//        std::cout << "After exclude: " << outputs.size() << std::endl;
+//        for (const auto & utxo : outputs)
+//            std::cout << "    After: " << utxo.txId << " " << utxo.vout << std::endl;
+
+        uint64_t utxoAmount = 0;
+        uint64_t fee1       = 0;
+        uint64_t fee2       = 0;
+
+        auto minTxFee1 = [&connFrom](const uint32_t & inputs, const uint32_t & outputs) -> double {
+            return connFrom->minTxFee1(inputs, outputs);
+        };
+        auto minTxFee2 = [&connFrom](const uint32_t & inputs, const uint32_t & outputs) -> double {
+            return connFrom->minTxFee2(inputs, outputs);
+        };
+
+        // Select utxos
+        std::vector<wallet::UtxoEntry> outputsForUse;
+        if (!selectUtxos(from, outputs, minTxFee1, minTxFee2, ptr->fromAmount,
+                         TransactionDescr::COIN, outputsForUse, utxoAmount, fee1, fee2))
+        {
+            ptr->state = priorState;
+            WARN() << "insufficient funds for <" << ptr->fromCurrency << "> " << __FUNCTION__;
+            unlockFeeUtxos(ptr->feeUtxos);
+            return xbridge::Error::INSIFFICIENT_FUNDS;
+        }
+
+        // sign used coins
+        for (wallet::UtxoEntry & entry : outputsForUse)
+        {
+            xbridge::Error err = xbridge::Error::SUCCESS;
+            std::string signature;
+            if (!connFrom->signMessage(entry.address, entry.toString(), signature))
+            {
+                WARN() << "funds not signed <" << ptr->fromCurrency << "> " << __FUNCTION__;
+                err = xbridge::Error::FUNDS_NOT_SIGNED;
+            }
+
+            bool isInvalid = false;
+            entry.signature = DecodeBase64(signature.c_str(), &isInvalid);
+            if (isInvalid)
+            {
+                WARN() << "invalid signature <" << ptr->fromCurrency << "> " << __FUNCTION__;
+                err = xbridge::Error::FUNDS_NOT_SIGNED;
+            }
+
+            entry.rawAddress = connFrom->toXAddr(entry.address);
+            if(entry.signature.size() != 65)
+            {
+                ERR() << "incorrect signature length, need 65 bytes " << __FUNCTION__;
+                err = xbridge::Error::INVALID_SIGNATURE;
+            }
+
+            if(entry.rawAddress.size() != 20)
+            {
+                ERR() << "incorrect raw address length, need 20 bytes " << __FUNCTION__;
+                err = xbridge::Error::INVALID_ADDRESS;
+            }
+
+            if (err) {
+                ptr->state = priorState;
+                // unlock fee utxos on error
+                unlockFeeUtxos(ptr->feeUtxos);
+                return err;
+            }
+        }
+
 //        std::cout << "Selected Order: " << ptr->id.ToString() << std::endl;
 //        for (const auto & utxo : outputsForUse)
 //            std::cout << "    Selected: " << utxo.txId << " " << utxo.vout << std::endl;
@@ -1922,6 +2221,7 @@ Error App::acceptXBridgeTransaction(const uint256     & id,
     ptr->toAddr    = to;
     ptr->to        = connTo->toXAddr(to);
     ptr->role      = 'B';
+    ptr->setPartialTransaction();
 
     // m key
     connTo->newKeyPair(ptr->mPubKey, ptr->mPrivKey);
@@ -1984,6 +2284,9 @@ bool App::Impl::sendAcceptingTransaction(const TransactionDescrPtr & ptr)
         packet->append(entry.rawAddress);
         packet->append(entry.signature);
     }
+
+    packet->append(uint16_t(ptr->isPartialOrderAllowed()));
+    packet->append(uint16_t(ptr->isPartialTransaction()));
 
     packet->sign(ptr->mPubKey, ptr->mPrivKey);
 
@@ -2076,6 +2379,23 @@ Error App::checkAcceptParams(const uint256       & id,
 
     // TODO enforce by address after improving addressbook
     return checkAmount(ptr->toCurrency, ptr->toAmount, "");
+}
+
+Error App::checkAcceptParams(const uint256       & id,
+                             TransactionDescrPtr & ptr,
+                             const uint64_t      & amount,
+                             const std::string   & /*fromAddress*/)
+{
+    // TODO need refactoring
+    ptr = transaction(id);
+
+    if(!ptr) {
+        WARN() << "transaction not found " << __FUNCTION__;
+        return xbridge::TRANSACTION_NOT_FOUND;
+    }
+
+    // TODO enforce by address after improving addressbook
+    return checkAmount(ptr->toCurrency, amount, "");
 }
 
 //******************************************************************************

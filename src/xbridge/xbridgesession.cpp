@@ -541,6 +541,9 @@ bool Session::Impl::processTransaction(XBridgePacketPtr packet) const
         }
     }
 
+    uint16_t isPartialOrder = *static_cast<uint16_t *>(static_cast<void *>(packet->data()+offset));
+    offset += sizeof(uint16_t);
+
     if (utxoItems.empty())
     {
         xbridge::LogOrderMsg(id.GetHex(), "order rejected, utxo items are empty <", __FUNCTION__);
@@ -614,7 +617,7 @@ bool Session::Impl::processTransaction(XBridgePacketPtr packet) const
                                  daddr, dcurrency, damount,
                                  timestamp,
                                  mpubkey, utxoItems,
-                                 blockHash, isCreated))
+                                 blockHash, isCreated, isPartialOrder))
         {
             // not created
             xbridge::LogOrderMsg(id.GetHex(), "failed to create order", __FUNCTION__);
@@ -634,6 +637,9 @@ bool Session::Impl::processTransaction(XBridgePacketPtr packet) const
                 d->toAmount     = damount;
                 d->state        = TransactionDescr::trPending;
                 d->blockHash    = blockHash;
+
+                if (isPartialOrder)
+                    d->allowPartialOrders();
 
                 xbridge::LogOrderMsg(d, __FUNCTION__);
 
@@ -670,10 +676,10 @@ bool Session::Impl::processPendingTransaction(XBridgePacketPtr packet) const
 
     DEBUG_TRACE();
 
-    if (packet->size() != 124)
+    if (packet->size() != 126)
     {
         ERR() << "incorrect packet size for xbcPendingTransaction "
-              << "need 124 received " << packet->size() << " "
+              << "need 126 received " << packet->size() << " "
               << __FUNCTION__;
         return false;
     }
@@ -774,6 +780,12 @@ bool Session::Impl::processPendingTransaction(XBridgePacketPtr packet) const
     std::vector<unsigned char> sblockhash(packet->data()+offset, packet->data()+offset+XBridgePacket::hashSize);
     ptr->blockHash    = uint256(sblockhash);
     offset += XBridgePacket::hashSize;
+
+    uint16_t isPartialOrderAllowed = *reinterpret_cast<boost::uint16_t *>(packet->data()+offset);
+    offset += sizeof(uint16_t);
+
+    if (isPartialOrderAllowed)
+        ptr->allowPartialOrders();
 
     xapp.appendTransaction(ptr);
 
@@ -969,6 +981,12 @@ bool Session::Impl::processTransactionAccepting(XBridgePacketPtr packet) const
         }
     }
 
+    uint16_t isPartialOrderAllowed = *static_cast<uint16_t *>(static_cast<void *>(packet->data()+offset));
+    offset += sizeof(uint16_t);
+
+    uint16_t isPartialTransaction = *static_cast<uint16_t *>(static_cast<void *>(packet->data()+offset));
+    offset += sizeof(uint16_t);
+
     if (commonAmount * TransactionDescr::COIN < samount)
     {
         trPending->setAccepting(false);
@@ -1009,7 +1027,8 @@ bool Session::Impl::processTransactionAccepting(XBridgePacketPtr packet) const
     }
 
     {
-        if (e.acceptTransaction(id, saddr, scurrency, samount, daddr, dcurrency, damount, mpubkey, utxoItems))
+        if (e.acceptTransaction(id, saddr, scurrency, samount, daddr, dcurrency, damount, mpubkey, utxoItems, 
+            isPartialOrderAllowed, isPartialTransaction))
         {
             // check transaction state, if trNew - do nothing,
             // if trJoined = send hold to client
@@ -1027,6 +1046,7 @@ bool Session::Impl::processTransactionAccepting(XBridgePacketPtr packet) const
                 xbridge::LogOrderMsg(log_obj, "wrong tx state, expecting joined state", __FUNCTION__);
                 return true;
             }
+
             // Set role 'B' utxos used in the order
             tr->b_setUtxos(utxoItems);
 
@@ -1035,6 +1055,12 @@ bool Session::Impl::processTransactionAccepting(XBridgePacketPtr packet) const
             XBridgePacketPtr reply1(new XBridgePacket(xbcTransactionHold));
             reply1->append(m_myid);
             reply1->append(tr->id().begin(), XBridgePacket::hashSize);
+            reply1->append(isPartialTransaction);
+
+            if (isPartialTransaction) {
+                reply1->append(samount);
+                reply1->append(damount);
+            }
 
             reply1->sign(e.pubKey(), e.privKey());
 
@@ -1052,10 +1078,10 @@ bool Session::Impl::processTransactionHold(XBridgePacketPtr packet) const
 
     DEBUG_TRACE();
 
-    if (packet->size() != 52)
+    if (packet->size() != 54 && packet->size() != 70)
     {
         ERR() << "incorrect packet size for xbcTransactionHold "
-              << "need 52 received " << packet->size() << " "
+              << "need 54 or 70 received " << packet->size() << " "
               << __FUNCTION__;
         return false;
     }
@@ -1075,6 +1101,18 @@ bool Session::Impl::processTransactionHold(XBridgePacketPtr packet) const
 
     // pubkey from packet
     std::vector<unsigned char> spubkey(packet->pubkey(), packet->pubkey()+XBridgePacket::pubkeySize);
+
+    uint16_t isPartialTransaction = *static_cast<uint16_t *>(static_cast<void *>(packet->data()+offset));
+    offset += sizeof(uint16_t);
+
+    uint64_t samount;
+    uint64_t damount;
+    if (isPartialTransaction) {
+        samount = *static_cast<uint64_t *>(static_cast<void *>(packet->data()+offset));
+        offset += sizeof(uint64_t);
+        damount = *static_cast<uint64_t *>(static_cast<void *>(packet->data()+offset));
+        offset += sizeof(uint64_t);
+    }
 
     TransactionDescrPtr xtx = xapp.transaction(id);
     if (!xtx)
@@ -1119,6 +1157,17 @@ bool Session::Impl::processTransactionHold(XBridgePacketPtr packet) const
     }
 
     xbridge::LogOrderMsg(id.GetHex(), "using service node " + HexStr(pksnode) + " for order", __FUNCTION__);
+
+    if (!xtx->isPartialOrderAllowed() && isPartialTransaction) {
+        WARN() << "partial tx not allowed for " << xtx->id.ToString() << " " << __FUNCTION__;
+        return true;
+    }
+
+    if (xtx->isPartialOrderAllowed() && isPartialTransaction) {
+        xtx->fromAmount = damount;
+        xtx->toAmount = samount;
+        xtx->setPartialTransaction();
+    }
 
     {
         // for xchange node remove tx
@@ -1182,6 +1231,12 @@ bool Session::Impl::processTransactionHold(XBridgePacketPtr packet) const
     reply->append(hubAddress);
     reply->append(xtx->from);
     reply->append(id.begin(), 32);
+    reply->append(isPartialTransaction);
+
+    if (isPartialTransaction) {
+        reply->append(xtx->fromAmount);
+        reply->append(xtx->toAmount);
+    }
 
     reply->sign(xtx->mPubKey, xtx->mPrivKey);
 
@@ -1197,8 +1252,8 @@ bool Session::Impl::processTransactionHoldApply(XBridgePacketPtr packet) const
 
     DEBUG_TRACE();
 
-    // size must be eq 72 bytes
-    if (packet->size() != 72 )
+    // size must be eq 74 or 90 bytes
+    if (packet->size() != 74 && packet->size() != 90)
     {
         ERR() << "invalid packet size for xbcTransactionHoldApply "
               << "need 72 received " << packet->size() << " "
@@ -1227,6 +1282,20 @@ bool Session::Impl::processTransactionHoldApply(XBridgePacketPtr packet) const
     // transaction id
     std::vector<unsigned char> sid(packet->data()+offset, packet->data()+offset+XBridgePacket::hashSize);
     uint256 id(sid);
+    offset += XBridgePacket::hashSize;
+
+    uint16_t isPartialTransaction = *static_cast<uint16_t *>(static_cast<void *>(packet->data()+offset));
+    offset += sizeof(uint16_t);
+
+    uint64_t samount;
+    uint64_t damount;
+    if (isPartialTransaction) {
+        samount = *static_cast<uint64_t *>(static_cast<void *>(packet->data()+offset));
+        offset += sizeof(uint64_t);
+        damount = *static_cast<uint64_t *>(static_cast<void *>(packet->data()+offset));
+        offset += sizeof(uint64_t);
+    }
+
     // packet pubkey
     std::vector<unsigned char> pubkey(packet->pubkey(), packet->pubkey()+XBridgePacket::pubkeySize);
 
@@ -1263,6 +1332,12 @@ bool Session::Impl::processTransactionHoldApply(XBridgePacketPtr packet) const
         return true;
     }
 
+    if (tr->isPartialAllowed() && isPartialTransaction) {
+        tr->setPartialTransaction();
+        tr->a_setPartialAmount(samount);
+        tr->b_setPartialAmount(damount);
+    }
+
     if (e.updateTransactionWhenHoldApplyReceived(tr, from))
     {
         if (tr->state() == xbridge::Transaction::trHold)
@@ -1286,10 +1361,11 @@ bool Session::Impl::processTransactionHoldApply(XBridgePacketPtr packet) const
             reply1->append(id.begin(), XBridgePacket::hashSize);
             reply1->append(tr->a_address());
             reply1->append(a_currency);
-            reply1->append(tr->a_amount());
+            reply1->append(tr->isPartialTx() ? tr->a_partial_amount() : tr->a_amount());
             reply1->append(tr->a_destination());
             reply1->append(b_currency);
-            reply1->append(tr->b_amount());
+            reply1->append(tr->isPartialTx() ? tr->b_partial_amount() : tr->b_amount());
+            reply1->append(uint16_t(tr->isPartialTx()));
 
             reply1->sign(e.pubKey(), e.privKey());
 
@@ -1302,10 +1378,11 @@ bool Session::Impl::processTransactionHoldApply(XBridgePacketPtr packet) const
             reply2->append(id.begin(), XBridgePacket::hashSize);
             reply2->append(tr->b_address());
             reply2->append(b_currency);
-            reply2->append(tr->b_amount());
+            reply2->append(tr->isPartialTx() ? tr->b_partial_amount() : tr->b_amount());
             reply2->append(tr->b_destination());
             reply2->append(a_currency);
-            reply2->append(tr->a_amount());
+            reply2->append(tr->isPartialTx() ? tr->a_partial_amount() : tr->a_amount());
+            reply2->append(uint16_t(tr->isPartialTx()));
 
             reply2->sign(e.pubKey(), e.privKey());
 
@@ -1322,10 +1399,10 @@ bool Session::Impl::processTransactionInit(XBridgePacketPtr packet) const
 {
     DEBUG_TRACE();
 
-    if (packet->size() != 144)
+    if (packet->size() != 146)
     {
         ERR() << "incorrect packet size for xbcTransactionInit "
-              << "need 144 bytes, received " << packet->size() << " "
+              << "need 146 bytes, received " << packet->size() << " "
               << __FUNCTION__;
         return false;
     }
@@ -1391,7 +1468,10 @@ bool Session::Impl::processTransactionInit(XBridgePacketPtr packet) const
     std::string   toCurrency(reinterpret_cast<const char *>(packet->data()+offset));
     offset += 8;
     uint64_t      toAmount(*reinterpret_cast<uint64_t *>(packet->data()+offset));
-
+    offset += sizeof(uint64_t);
+    uint16_t      isPartialTx(*reinterpret_cast<uint16_t *>(packet->data()+offset));
+    offset += sizeof(uint16_t);
+ 
     if(xtx->id           != txid &&
        xtx->from         != from &&
        xtx->fromCurrency != fromCurrency &&
@@ -1402,6 +1482,12 @@ bool Session::Impl::processTransactionInit(XBridgePacketPtr packet) const
     {
         LogOrderMsg(txid.GetHex(), "order details do not match expected", __FUNCTION__);
         return true;
+    }
+
+    if (isPartialTx) 
+    {
+        xtx->fromAmount = fromAmount;
+        xtx->toAmount = toAmount;
     }
 
     // acceptor fee
@@ -3162,6 +3248,8 @@ void Session::sendListOfTransactions() const
         packet->append(xbridge::timeToInt(ptr->createdTime()));
         packet->append(ptr->blockHash().begin(), 32);
 
+        packet->append(uint16_t(ptr->isPartialAllowed()));
+
         packet->sign(e.pubKey(), e.privKey());
 
         m_p->sendPacketBroadcast(packet);
@@ -3200,6 +3288,12 @@ void Session::Impl::sendTransaction(uint256 & id) const
     packet->append(m_myid);
     packet->append(xbridge::timeToInt(tr->createdTime()));
     packet->append(tr->blockHash().begin(), 32);
+
+    uint16_t isPartialOrder = 0;
+    if (tr->isPartialAllowed())
+        isPartialOrder = 1;
+
+    packet->append(isPartialOrder);
 
     packet->sign(e.pubKey(), e.privKey());
 
