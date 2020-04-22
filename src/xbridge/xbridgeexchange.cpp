@@ -307,6 +307,25 @@ bool Exchange::createTransaction(const uint256                        & txid,
                                  uint256                              & blockHash,
                                  bool                                 & isCreated)
 {
+    createTransaction(txid, sourceAddr, sourceCurrency, 
+        sourceAmount, destAddr, destCurrency, destAmount, 
+        timestamp, mpubkey, items, blockHash, isCreated, false);
+}
+
+bool Exchange::createTransaction(const uint256                        & txid,
+                                 const std::vector<unsigned char>     & sourceAddr,
+                                 const std::string                    & sourceCurrency,
+                                 const uint64_t                       & sourceAmount,
+                                 const std::vector<unsigned char>     & destAddr,
+                                 const std::string                    & destCurrency,
+                                 const uint64_t                       & destAmount,
+                                 const uint64_t                       & timestamp,
+                                 const std::vector<unsigned char>     & mpubkey,
+                                 const std::vector<wallet::UtxoEntry> & items,
+                                 uint256                              & blockHash,
+                                 bool                                 & isCreated,
+                                 bool                                   isPartialOrder)
+{
     DEBUG_TRACE();
 
     isCreated = false;
@@ -354,7 +373,9 @@ bool Exchange::createTransaction(const uint256                        & txid,
                                                destCurrency, destAmount,
                                                timestamp,
                                                blockHash,
-                                               mpubkey));
+                                               mpubkey,
+                                               isPartialOrder,
+                                               false));
     if (!tr->isValid())
     {
         LOG() << "created tx " <<  txid.ToString()
@@ -418,7 +439,9 @@ bool Exchange::acceptTransaction(const uint256                        & txid,
                                  const std::string                    & destCurrency,
                                  const uint64_t                       & destAmount,
                                  const std::vector<unsigned char>     & mpubkey,
-                                 const std::vector<wallet::UtxoEntry> & items)
+                                 const std::vector<wallet::UtxoEntry> & items,
+                                 bool                                   isPartialOrderAllowed,
+                                 bool                                   isPartialTransaction)
 {
     DEBUG_TRACE();
 
@@ -442,12 +465,20 @@ bool Exchange::acceptTransaction(const uint256                        & txid,
                                                sourceCurrency, sourceAmount,
                                                destAddr,
                                                destCurrency, destAmount,
-                                               std::time(0), uint256(), mpubkey));
+                                               std::time(0), uint256(), mpubkey,
+                                               isPartialOrderAllowed, isPartialTransaction));
     if (!tr->isValid())
     {
         LOG() << "invalid transaction " << __FUNCTION__;
         return false;
     }
+
+    if (isPartialTransaction)
+    {
+        tr->a_setPartialAmount(sourceAmount);
+        tr->b_setPartialAmount(destAmount);
+    }
+
 
     TransactionPtr tmp;
 
@@ -511,6 +542,22 @@ bool Exchange::acceptTransaction(const uint256                        & txid,
     lockUtxos(txid, items);
 
     return true;
+}
+
+//*****************************************************************************
+//*****************************************************************************
+bool Exchange::acceptTransaction(const uint256                        & txid,
+                                 const std::vector<unsigned char>     & sourceAddr,
+                                 const std::string                    & sourceCurrency,
+                                 const uint64_t                       & sourceAmount,
+                                 const std::vector<unsigned char>     & destAddr,
+                                 const std::string                    & destCurrency,
+                                 const uint64_t                       & destAmount,
+                                 const std::vector<unsigned char>     & mpubkey,
+                                 const std::vector<wallet::UtxoEntry> & items)
+{
+    return acceptTransaction(txid, sourceAddr, sourceCurrency, sourceAmount, 
+        destAddr, destCurrency, destAmount, mpubkey, items, false, false);
 }
 
 //*****************************************************************************

@@ -80,6 +80,19 @@ public:
                 const uint256                    & blockHash,
                 const std::vector<unsigned char> & mpubkey);
 
+    Transaction(const uint256                    & id,
+                const std::vector<unsigned char> & sourceAddr,
+                const std::string                & sourceCurrency,
+                const uint64_t                   & sourceAmount,
+                const std::vector<unsigned char> & destAddr,
+                const std::string                & destCurrency,
+                const uint64_t                   & destAmount,
+                const uint64_t                   & created,
+                const uint256                    & blockHash,
+                const std::vector<unsigned char> & mpubkey,
+                const bool                       & partialAllowed,
+                const bool                       & partialTx);
+
     ~Transaction();
 
     uint256 id() const;
@@ -201,6 +214,7 @@ public:
     std::vector<unsigned char> a_destination() const;
     std::string                a_currency() const;
     uint64_t                   a_amount() const;
+    uint64_t                   a_partial_amount() const;
     std::string                a_payTx() const;
     std::string                a_refTx() const { LOCK(m_lock); return m_a.refTx(); }
     std::string                a_bintxid() const;
@@ -216,6 +230,7 @@ public:
     std::vector<unsigned char> b_destination() const;
     std::string                b_currency() const;
     uint64_t                   b_amount() const;
+    uint64_t                   b_partial_amount() const;
     std::string                b_payTx() const;
     std::string                b_refTx() const { LOCK(m_lock); return m_b.refTx(); }
     std::string                b_bintxid() const;
@@ -254,6 +269,33 @@ public:
         m_b.setRefTxId(refTxId); m_b.setRefTx(refTx);
     }
 
+    void a_setPartialAmount(uint64_t amount) {
+        LOCK(m_lock);
+        m_sourcePartialAmount = amount;
+    }
+
+    void b_setPartialAmount(uint64_t amount) {
+        LOCK(m_lock);
+        m_destPartialAmount = amount;
+    }
+
+    void setPartialTransaction() {
+        LOCK(m_lock);
+        m_partialTx = true;
+    }
+
+    /**
+     * @brief isPartialAllowed
+     * @return true, if partial txs are allowed
+     */
+    bool isPartialAllowed();
+
+    /**
+     * @brief isPartialTx
+     * @return true, if transaction is a partial trade
+     */
+    bool isPartialTx();
+
     friend std::ostream & operator << (std::ostream & out, const TransactionPtr & tx);
 
 public:
@@ -276,6 +318,9 @@ private:
     bool                       m_a_refunded{false};
     bool                       m_b_refunded{false};
 
+    bool                       m_partialAllowed{false};
+    bool                       m_partialTx{false};
+
     unsigned int               m_confirmationCounter;
 
     std::string                m_sourceCurrency;
@@ -283,6 +328,9 @@ private:
 
     uint64_t                   m_sourceAmount;
     uint64_t                   m_destAmount;
+
+    uint64_t                   m_sourcePartialAmount;
+    uint64_t                   m_destPartialAmount;
 
     std::string                m_bintxid1;
     std::string                m_bintxid2;

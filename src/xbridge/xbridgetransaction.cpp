@@ -72,6 +72,40 @@ Transaction::Transaction(const uint256                    & id,
     m_a.setMPubkey(mpubkey);
 }
 
+Transaction::Transaction(const uint256                    & id,
+                         const std::vector<unsigned char> & sourceAddr,
+                         const std::string                & sourceCurrency,
+                         const uint64_t                   & sourceAmount,
+                         const std::vector<unsigned char> & destAddr,
+                         const std::string                & destCurrency,
+                         const uint64_t                   & destAmount,
+                         const uint64_t                   & created,
+                         const uint256                    & blockHash,
+                         const std::vector<unsigned char> & mpubkey,
+                         const bool                       & partialAllowed,
+                         const bool                       & partialTx)
+    : m_id(id)
+    , m_created(xbridge::intToTime(created))
+    , m_last(boost::posix_time::microsec_clock::universal_time())
+    , m_lastUtxoCheck(boost::posix_time::microsec_clock::universal_time())
+    , m_blockHash(blockHash)
+    , m_state(trNew)
+    , m_a_stateChanged(false)
+    , m_b_stateChanged(false)
+    , m_confirmationCounter(0)
+    , m_sourceCurrency(sourceCurrency)
+    , m_destCurrency(destCurrency)
+    , m_sourceAmount(sourceAmount)
+    , m_destAmount(destAmount)
+    , m_a(id)
+    , m_partialAllowed(partialAllowed)
+    , m_partialTx(partialTx)
+{
+    m_a.setSource(sourceAddr);
+    m_a.setDest(destAddr);
+    m_a.setMPubkey(mpubkey);
+}
+
 //*****************************************************************************
 //*****************************************************************************
 Transaction::~Transaction()
@@ -303,6 +337,18 @@ bool Transaction::isExpiredByBlockNumber() const
     return false;
 }
 
+bool Transaction::isPartialAllowed()
+{
+    LOCK(m_lock);
+    return m_partialAllowed;
+}
+
+bool Transaction::isPartialTx()
+{
+    LOCK(m_lock);
+    return m_partialTx;
+}
+
 //*****************************************************************************
 //*****************************************************************************
 void Transaction::cancel()
@@ -361,6 +407,14 @@ uint64_t Transaction::a_amount() const
 {
     LOCK(m_lock);
     return m_sourceAmount;
+}
+
+//*****************************************************************************
+//*****************************************************************************
+uint64_t Transaction::a_partial_amount() const
+{
+    LOCK(m_lock);
+    return m_sourcePartialAmount;
 }
 
 //*****************************************************************************
@@ -435,6 +489,14 @@ uint64_t Transaction::b_amount() const
 
 //*****************************************************************************
 //*****************************************************************************
+uint64_t Transaction::b_partial_amount() const
+{
+    LOCK(m_lock);
+    return m_destPartialAmount;
+}
+
+//*****************************************************************************
+//*****************************************************************************
 std::string Transaction::b_bintxid() const
 {
     LOCK(m_lock);
@@ -492,11 +554,40 @@ bool Transaction::tryJoin(const TransactionPtr other)
         return false;
     }
 
-    if (m_sourceAmount != other->m_destAmount ||
-        m_destAmount != other->m_sourceAmount)
+    if (m_partialAllowed != other->m_partialAllowed) {
+        ERR() << "partial allowed states do not match. transaction not joined " << __FUNCTION__;
+        return false;
+    }
+    
+    if (m_partialAllowed && other->m_partialTx)
     {
-        // not same currencies
-        ERR() << "not same amount. transaction not joined" << __FUNCTION__;
+        double price = xBridgeValueFromAmount(m_destAmount) / xBridgeValueFromAmount(m_sourceAmount);
+        double otherPrice = xBridgeValueFromAmount(m_destAmount) / xBridgeValueFromAmount(m_sourceAmount);
+
+        if ((price == 0 || (price != otherPrice)) && (price / m_destAmount) != m_sourceAmount) {
+            ERR() << "partial order price/amount mismatch. transaction not joined " << __FUNCTION__;
+            return false;
+        }
+    }
+
+    if (!m_partialAllowed && other->m_partialTx)
+    {
+        ERR() << "partial order not allowed. transaction not joined " << __FUNCTION__;
+        return false;
+    }
+
+    if (m_partialAllowed && (m_sourceAmount < other->m_destAmount ||
+        m_destAmount < other->m_sourceAmount))
+    {
+        ERR() << "partial order amount error. transaction not joined " << __FUNCTION__;
+        return false;
+    }
+
+    if (!m_partialAllowed && (m_sourceAmount != other->m_destAmount ||
+        m_destAmount != other->m_sourceAmount))
+    {
+        // amounts do not match
+        ERR() << "not same amount. transaction not joined " << __FUNCTION__;
         return false;
     }
 
@@ -589,6 +680,7 @@ std::ostream & operator << (std::ostream & out, const TransactionPtr & tx)
         << "TAKER SIZE: " << xbridge::xBridgeStringValueFromAmount(tx->b_amount()) << std::endl
         << "TAKER ADDR: " << (!tx->b_address().empty() && connTo ? connTo->fromXAddr(tx->b_address()) : "") << std::endl
         << "STATE: " << tx->strState() << std::endl
+        << "PARTIAL ALLOWED: " << tx->isPartialAllowed() << std::endl
         << "BLOCK HASH: " << tx->blockHash().GetHex() << std::endl
         << "CREATED AT: " << xbridge::iso8601(tx->createdTime()) << std::endl
         << "USED INPUTS: " << std::endl << inputsStream.str();

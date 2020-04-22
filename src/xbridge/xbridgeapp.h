@@ -241,6 +241,7 @@ public:
      * @param to - destionation amount
      * @param toCurrency - destionation currency
      * @param toAmount - destionation amount
+     * @param partialOrder - partial order flag
      * @param id - id of transaction
      * @param blockHash
      * @return xbridge::SUCCES if success, else error code
@@ -251,6 +252,7 @@ public:
                                  const std::string & to,
                                  const std::string & toCurrency,
                                  const uint64_t & toAmount,
+                                 const bool & partialOrder,
                                  uint256 & id,
                                  uint256& blockHash);
     // TODO make protected
@@ -271,6 +273,21 @@ public:
     Error acceptXBridgeTransaction(const uint256 & id,
                                      const std::string & from,
                                      const std::string & to);
+
+    /**
+     * @brief acceptXBridgePartialTransaction - accept partial transaction
+     * @param id - id of  transaction
+     * @param from - destionation address
+     * @param to - source address
+     * @param makerSize - new maker amount
+     * @param takerSize - new taker amount
+     * @return xbridge::SUCCESS, if transaction success accepted
+     */
+    Error acceptXBridgePartialTransaction(const uint256 & id,
+                                     const std::string  & from,
+                                     const std::string  & to,
+                                     const uint64_t     & makerSize, 
+                                     const uint64_t     & takerSize);
 
     /**
      * @brief cancelXBridgeTransaction - cancel xbridge transaction
@@ -300,6 +317,16 @@ public:
      * @return xbridge::SUCCESS, if all parameters valid
      */
     xbridge::Error checkAcceptParams(const uint256 &id, TransactionDescrPtr &ptr, const std::string &fromAddress);
+
+    /**
+     * @brief checkAcceptParams checks the correctness of the parameters
+     * @param id - id accepted transaction
+     * @param ptr - smart pointer to accepted transaction
+     * @param amount - amount to be taken
+     * @param fromAddress - address to pull utxo's from
+     * @return xbridge::SUCCESS, if all parameters valid
+     */
+    xbridge::Error checkAcceptParams(const uint256 &id, TransactionDescrPtr &ptr, const uint64_t &amount, const std::string &fromAddress);
 
     /**
      * @brief checkCreateParams - checks parameter needs to success created transaction
