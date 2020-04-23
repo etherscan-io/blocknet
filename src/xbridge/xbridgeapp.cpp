@@ -1363,6 +1363,7 @@ xbridge::Error App::sendXBridgeTransaction(const std::string & from,
                                            const std::string & toCurrency,
                                            const uint64_t & toAmount,
                                            const bool & partialOrder,
+                                           const uint64_t & partialMinimum,
                                            uint256 & id,
                                            uint256 & blockHash)
 {
@@ -1529,21 +1530,22 @@ xbridge::Error App::sendXBridgeTransaction(const std::string & from,
        << firstUtxoSig;
     id = ss.GetHash();
 
-    ptr->hubAddress   = snodeAddress;
-    ptr->sPubKey      = sPubKey;
-    ptr->created      = timestamp;
-    ptr->txtime       = timestamp;
-    ptr->id           = id;
-    ptr->fromAddr     = from;
-    ptr->from         = connFrom->toXAddr(from);
-    ptr->fromCurrency = fromCurrency;
-    ptr->fromAmount   = fromAmount;
-    ptr->toAddr       = to;
-    ptr->to           = connTo->toXAddr(to);
-    ptr->toCurrency   = toCurrency;
-    ptr->toAmount     = toAmount;
-    ptr->blockHash    = blockHash;
-    ptr->role         = 'A';
+    ptr->hubAddress    = snodeAddress;
+    ptr->sPubKey       = sPubKey;
+    ptr->created       = timestamp;
+    ptr->txtime        = timestamp;
+    ptr->id            = id;
+    ptr->fromAddr      = from;
+    ptr->from          = connFrom->toXAddr(from);
+    ptr->fromCurrency  = fromCurrency;
+    ptr->fromAmount    = fromAmount;
+    ptr->toAddr        = to;
+    ptr->to            = connTo->toXAddr(to);
+    ptr->toCurrency    = toCurrency;
+    ptr->toAmount      = toAmount;
+    ptr->blockHash     = blockHash;
+    ptr->role          = 'A';
+    ptr->minFromAmount = (partialOrder ? partialMinimum : fromAmount);
 
     if (partialOrder)
         ptr->allowPartialOrders();
@@ -1650,6 +1652,7 @@ bool App::Impl::sendPendingTransaction(const TransactionDescrPtr & ptr)
     }
 
     packet->append(uint16_t(ptr->isPartialOrderAllowed()));
+    packet->append(ptr->minFromAmount);
 
     packet->sign(ptr->mPubKey, ptr->mPrivKey);
 
@@ -1979,6 +1982,9 @@ Error App::acceptXBridgePartialTransaction(const uint256      & id,
     const auto priorState = ptr->state;
     ptr->state = TransactionDescr::trAccepting;
 
+    uint64_t oldFromAmount = ptr->fromAmount;
+    uint64_t oldToAmount = ptr->toAmount;
+
     ptr->fromAmount = makerSize;
     ptr->toAmount = takerSize;
 
@@ -1988,6 +1994,9 @@ Error App::acceptXBridgePartialTransaction(const uint256      & id,
     if ((!connFrom || !connTo) && !nowalletswitch)
     {
         ptr->state = priorState;
+        ptr->fromAmount = oldFromAmount;
+        ptr->toAmount = oldToAmount;
+
         // no session
         WARN() << "no wallet session for <" << (connFrom ? ptr->fromCurrency : ptr->toCurrency) << "> " << __FUNCTION__;
         return xbridge::NO_SESSION;
@@ -1997,17 +2006,26 @@ Error App::acceptXBridgePartialTransaction(const uint256      & id,
     if (connFrom->isDustAmount(static_cast<double>(ptr->fromAmount) / TransactionDescr::COIN))
     {
         ptr->state = priorState;
+        ptr->fromAmount = oldFromAmount;
+        ptr->toAmount = oldToAmount;
+
         return xbridge::Error::DUST;
     }
     if (connTo->isDustAmount(static_cast<double>(ptr->toAmount) / TransactionDescr::COIN))
     {
         ptr->state = priorState;
+        ptr->fromAmount = oldFromAmount;
+        ptr->toAmount = oldToAmount;
+
         return xbridge::Error::DUST;
     }
 
     if (availableBalance() < connTo->serviceNodeFee)
     {
         ptr->state = priorState;
+        ptr->fromAmount = oldFromAmount;
+        ptr->toAmount = oldToAmount;
+
         return xbridge::Error::INSIFFICIENT_FUNDS_DX;
     }
 
@@ -2017,6 +2035,9 @@ Error App::acceptXBridgePartialTransaction(const uint256      & id,
         uint32_t len = ptr->sPubKey.size();
         if (len != 33) {
             ptr->state = priorState;
+            ptr->fromAmount = oldFromAmount;
+            ptr->toAmount = oldToAmount;
+
             LOG() << "bad service node public key, len " << len << " " << __FUNCTION__;
             return xbridge::Error::NO_SERVICE_NODE;
         }
@@ -2036,6 +2057,9 @@ Error App::acceptXBridgePartialTransaction(const uint256      & id,
             if (snode.isNull())
             {
                 ptr->state = priorState;
+                ptr->fromAmount = oldFromAmount;
+                ptr->toAmount = oldToAmount;
+
                 // bad service node, no more
                 LOG() << "unknown service node pubkey " << pksnode.GetID().ToString() << " " << __FUNCTION__;
                 return xbridge::Error::NO_SERVICE_NODE;
@@ -2069,6 +2093,9 @@ Error App::acceptXBridgePartialTransaction(const uint256      & id,
     strInfo = write_string(json_spirit::Value(info));
     if (strInfo.size() > maxBytes) { // make sure we're not too large
         ptr->state = priorState;
+        ptr->fromAmount = oldFromAmount;
+        ptr->toAmount = oldToAmount;
+
         return xbridge::Error::INVALID_ONCHAIN_HISTORY;
     }
 
@@ -2083,6 +2110,9 @@ Error App::acceptXBridgePartialTransaction(const uint256      & id,
         std::vector<wallet::UtxoEntry> feeOutputs;
         if (!rpc::unspentP2PKH(feeOutputs)) {
             ptr->state = priorState;
+            ptr->fromAmount = oldFromAmount;
+            ptr->toAmount = oldToAmount;
+
             WARN() << "insufficient BLOCK funds for service node fee payment " << __FUNCTION__;
             return xbridge::Error::INSIFFICIENT_FUNDS;
         }
@@ -2103,6 +2133,9 @@ Error App::acceptXBridgePartialTransaction(const uint256      & id,
                 data, feeOutputs, ptr->feeUtxos, ptr->rawFeeTx))
         {
             ptr->state = priorState;
+            ptr->fromAmount = oldFromAmount;
+            ptr->toAmount = oldToAmount;
+
             ERR() << "Failed to take order, couldn't prepare the service node fee " << __FUNCTION__;
             return xbridge::Error::INSIFFICIENT_FUNDS;
         }
@@ -2182,6 +2215,9 @@ Error App::acceptXBridgePartialTransaction(const uint256      & id,
 
             if (err) {
                 ptr->state = priorState;
+                ptr->fromAmount = oldFromAmount;
+                ptr->toAmount = oldToAmount;
+
                 // unlock fee utxos on error
                 unlockFeeUtxos(ptr->feeUtxos);
                 return err;
@@ -2196,6 +2232,9 @@ Error App::acceptXBridgePartialTransaction(const uint256      & id,
         // lock used coins
         if (!lockCoins(connFrom->currency, ptr->usedCoins)) {
             ptr->state = priorState;
+            ptr->fromAmount = oldFromAmount;
+            ptr->toAmount = oldToAmount;
+            
             ERR() << "failed to create order, cannot reuse utxo inputs for " << connFrom->currency
                   << " across multiple orders " << __FUNCTION__;
             return xbridge::Error::INSIFFICIENT_FUNDS;
@@ -3407,6 +3446,20 @@ std::ostream & operator << (std::ostream& out, const TransactionDescrPtr& tx)
 
 WalletConnectorPtr ConnectorByCurrency(const std::string & currency) {
     return App::instance().connectorByCurrency(currency);
+}
+
+//******************************************************************************
+//******************************************************************************
+xbridge::Error App::sendXBridgeTransaction(const std::string & from,
+                                           const std::string & fromCurrency,
+                                           const uint64_t & fromAmount,
+                                           const std::string & to,
+                                           const std::string & toCurrency,
+                                           const uint64_t & toAmount,
+                                           uint256 & id,
+                                           uint256 & blockHash)
+{
+    return sendXBridgeTransaction(from, fromCurrency, fromAmount, to, toCurrency, toAmount, false, 0, id, blockHash);
 }
 
 } // namespace xbridge

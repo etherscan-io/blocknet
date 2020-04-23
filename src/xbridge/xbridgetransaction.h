@@ -93,6 +93,20 @@ public:
                 const bool                       & partialAllowed,
                 const bool                       & partialTx);
 
+    Transaction(const uint256                    & id,
+                const std::vector<unsigned char> & sourceAddr,
+                const std::string                & sourceCurrency,
+                const uint64_t                   & sourceAmount,
+                const std::vector<unsigned char> & destAddr,
+                const std::string                & destCurrency,
+                const uint64_t                   & destAmount,
+                const uint64_t                   & created,
+                const uint256                    & blockHash,
+                const std::vector<unsigned char> & mpubkey,
+                const bool                       & partialAllowed,
+                const bool                       & partialTx,
+                const uint64_t                   & minFromAmount);
+
     ~Transaction();
 
     uint256 id() const;
@@ -239,6 +253,8 @@ public:
     bool                       b_refunded() const { LOCK(m_lock); return m_b_refunded; }
     const std::vector<wallet::UtxoEntry> b_utxos() const { LOCK(m_lock); return m_b.utxos(); }
 
+    uint64_t                   min_partial_amount() const { LOCK(m_lock); return m_minPartialAmount; }
+
     std::vector<unsigned char> b_pk1() const;
 
     bool tryJoin(const TransactionPtr other);
@@ -331,6 +347,8 @@ private:
 
     uint64_t                   m_sourcePartialAmount;
     uint64_t                   m_destPartialAmount;
+
+    uint64_t                   m_minPartialAmount;
 
     std::string                m_bintxid1;
     std::string                m_bintxid2;

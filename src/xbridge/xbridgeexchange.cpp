@@ -305,26 +305,9 @@ bool Exchange::createTransaction(const uint256                        & txid,
                                  const std::vector<unsigned char>     & mpubkey,
                                  const std::vector<wallet::UtxoEntry> & items,
                                  uint256                              & blockHash,
-                                 bool                                 & isCreated)
-{
-    createTransaction(txid, sourceAddr, sourceCurrency, 
-        sourceAmount, destAddr, destCurrency, destAmount, 
-        timestamp, mpubkey, items, blockHash, isCreated, false);
-}
-
-bool Exchange::createTransaction(const uint256                        & txid,
-                                 const std::vector<unsigned char>     & sourceAddr,
-                                 const std::string                    & sourceCurrency,
-                                 const uint64_t                       & sourceAmount,
-                                 const std::vector<unsigned char>     & destAddr,
-                                 const std::string                    & destCurrency,
-                                 const uint64_t                       & destAmount,
-                                 const uint64_t                       & timestamp,
-                                 const std::vector<unsigned char>     & mpubkey,
-                                 const std::vector<wallet::UtxoEntry> & items,
-                                 uint256                              & blockHash,
                                  bool                                 & isCreated,
-                                 bool                                   isPartialOrder)
+                                 bool                                   isPartialOrder,
+                                 const uint64_t                       & minFromAmount)
 {
     DEBUG_TRACE();
 
@@ -375,7 +358,8 @@ bool Exchange::createTransaction(const uint256                        & txid,
                                                blockHash,
                                                mpubkey,
                                                isPartialOrder,
-                                               false));
+                                               false,
+                                               minFromAmount));
     if (!tr->isValid())
     {
         LOG() << "created tx " <<  txid.ToString()
@@ -909,6 +893,26 @@ bool Exchange::makerUtxosAreStillValid(const TransactionPtr & tx)
     }
 
     return true; // done
+}
+
+//*****************************************************************************
+//*****************************************************************************
+bool Exchange::createTransaction(const uint256                        & txid,
+                                 const std::vector<unsigned char>     & sourceAddr,
+                                 const std::string                    & sourceCurrency,
+                                 const uint64_t                       & sourceAmount,
+                                 const std::vector<unsigned char>     & destAddr,
+                                 const std::string                    & destCurrency,
+                                 const uint64_t                       & destAmount,
+                                 const uint64_t                       & timestamp,
+                                 const std::vector<unsigned char>     & mpubkey,
+                                 const std::vector<wallet::UtxoEntry> & items,
+                                 uint256                              & blockHash,
+                                 bool                                 & isCreated)
+{
+    createTransaction(txid, sourceAddr, sourceCurrency, 
+        sourceAmount, destAddr, destCurrency, destAmount, 
+        timestamp, mpubkey, items, blockHash, isCreated, false, 0);
 }
 
 } // namespace xbridge
