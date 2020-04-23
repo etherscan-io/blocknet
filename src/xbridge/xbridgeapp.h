@@ -242,9 +242,10 @@ public:
      * @param toCurrency - destionation currency
      * @param toAmount - destionation amount
      * @param partialOrder - partial order flag
+     * @param partialMinimum - partial minimum amount
      * @param id - id of transaction
      * @param blockHash
-     * @return xbridge::SUCCES if success, else error code
+     * @return xbridge::SUCCESS if success, else error code
      */
     Error sendXBridgeTransaction(const std::string & from,
                                  const std::string & fromCurrency,
@@ -253,8 +254,31 @@ public:
                                  const std::string & toCurrency,
                                  const uint64_t & toAmount,
                                  const bool & partialOrder,
+                                 const uint64_t & partialMinimum,
                                  uint256 & id,
                                  uint256& blockHash);
+
+    /**
+     * @brief sendXBridgeTransaction - create new xbridge transaction and send to network
+     * @param from - source address
+     * @param fromCurrency - source currency
+     * @param fromAmount - source amount
+     * @param to - destionation amount
+     * @param toCurrency - destionation currency
+     * @param toAmount - destionation amount
+     * @param id - id of transaction
+     * @param blockHash
+     * @return xbridge::SUCCESS if success, else error code
+     */
+    Error sendXBridgeTransaction(const std::string & from,
+                                 const std::string & fromCurrency,
+                                 const uint64_t & fromAmount,
+                                 const std::string & to,
+                                 const std::string & toCurrency,
+                                 const uint64_t & toAmount,
+                                 uint256 & id,
+                                 uint256& blockHash);
+
     // TODO make protected
     /**
      * @brief sendPendingTransaction - send packet with data of pending transaction to network

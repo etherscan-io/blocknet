@@ -141,8 +141,7 @@ struct TransactionDescr
     bool     partialTransaction{false};
 
     // partial order amounts
-    uint64_t fromPartialAmount;
-    uint64_t toPartialAmount;
+    uint64_t minFromAmount;
 
     // keep track of excluded servicenodes (snodes can be excluded if they fail to post)
     std::set<CPubKey> _excludedSnodes;
@@ -463,8 +462,7 @@ private:
         partialOrdersAllowed = d.partialOrdersAllowed;
         partialTransaction   = d.partialTransaction;
 
-        fromPartialAmount = d.fromPartialAmount;
-        toPartialAmount   = d.toPartialAmount;
+        minFromAmount = d.minFromAmount;
         }
         updateTimestamp(d);
     }

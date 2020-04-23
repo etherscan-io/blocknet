@@ -544,6 +544,9 @@ bool Session::Impl::processTransaction(XBridgePacketPtr packet) const
     uint16_t isPartialOrder = *static_cast<uint16_t *>(static_cast<void *>(packet->data()+offset));
     offset += sizeof(uint16_t);
 
+    uint64_t minFromAmount = *static_cast<uint64_t *>(static_cast<void *>(packet->data()+offset));
+    offset += sizeof(uint64_t);
+
     if (utxoItems.empty())
     {
         xbridge::LogOrderMsg(id.GetHex(), "order rejected, utxo items are empty <", __FUNCTION__);
@@ -615,9 +618,8 @@ bool Session::Impl::processTransaction(XBridgePacketPtr packet) const
         if (!e.createTransaction(id,
                                  saddr, scurrency, samount,
                                  daddr, dcurrency, damount,
-                                 timestamp,
-                                 mpubkey, utxoItems,
-                                 blockHash, isCreated, isPartialOrder))
+                                 timestamp, mpubkey, utxoItems,
+                                 blockHash, isCreated, isPartialOrder, minFromAmount))
         {
             // not created
             xbridge::LogOrderMsg(id.GetHex(), "failed to create order", __FUNCTION__);
@@ -630,13 +632,14 @@ bool Session::Impl::processTransaction(XBridgePacketPtr packet) const
         {
             {
                 TransactionDescrPtr d(new TransactionDescr);
-                d->id           = id;
-                d->fromCurrency = scurrency;
-                d->fromAmount   = samount;
-                d->toCurrency   = dcurrency;
-                d->toAmount     = damount;
-                d->state        = TransactionDescr::trPending;
-                d->blockHash    = blockHash;
+                d->id            = id;
+                d->fromCurrency  = scurrency;
+                d->fromAmount    = samount;
+                d->toCurrency    = dcurrency;
+                d->toAmount      = damount;
+                d->state         = TransactionDescr::trPending;
+                d->blockHash     = blockHash;
+                d->minFromAmount = minFromAmount;
 
                 if (isPartialOrder)
                     d->allowPartialOrders();
@@ -676,10 +679,10 @@ bool Session::Impl::processPendingTransaction(XBridgePacketPtr packet) const
 
     DEBUG_TRACE();
 
-    if (packet->size() != 126)
+    if (packet->size() != 134)
     {
         ERR() << "incorrect packet size for xbcPendingTransaction "
-              << "need 126 received " << packet->size() << " "
+              << "need 134 received " << packet->size() << " "
               << __FUNCTION__;
         return false;
     }
@@ -782,10 +785,12 @@ bool Session::Impl::processPendingTransaction(XBridgePacketPtr packet) const
     offset += XBridgePacket::hashSize;
 
     uint16_t isPartialOrderAllowed = *reinterpret_cast<boost::uint16_t *>(packet->data()+offset);
+    ptr->partialOrdersAllowed = (isPartialOrderAllowed == 1 ? true : false);
     offset += sizeof(uint16_t);
 
-    if (isPartialOrderAllowed)
-        ptr->allowPartialOrders();
+    uint64_t minFromAmount = *reinterpret_cast<boost::uint64_t *>(packet->data()+offset);
+    ptr->minFromAmount = minFromAmount;
+    offset += sizeof(uint64_t);
 
     xapp.appendTransaction(ptr);
 
@@ -995,6 +1000,20 @@ bool Session::Impl::processTransactionAccepting(XBridgePacketPtr packet) const
         log_obj.pushKV("expecting_amount", samount);
         log_obj.pushKV("received_amount", commonAmount);
         xbridge::LogOrderMsg(log_obj, "rejecting taker order request, insufficient funds", __FUNCTION__);
+        return true;
+    }
+
+    if (isPartialTransaction && !trPending->isPartialAllowed())
+    {
+        trPending->setAccepting(false);
+        LOG() << "order rejected, partials are not allowed for this order" << __FUNCTION__;
+        return true;
+    }
+
+    if ((isPartialTransaction && trPending->isPartialAllowed()) && (damount < trPending->min_partial_amount()))
+    {
+        trPending->setAccepting(false);
+        LOG() << "order rejected, amount must be greater than minimum" << __FUNCTION__;
         return true;
     }
 
@@ -3289,11 +3308,8 @@ void Session::Impl::sendTransaction(uint256 & id) const
     packet->append(xbridge::timeToInt(tr->createdTime()));
     packet->append(tr->blockHash().begin(), 32);
 
-    uint16_t isPartialOrder = 0;
-    if (tr->isPartialAllowed())
-        isPartialOrder = 1;
-
-    packet->append(isPartialOrder);
+    packet->append(uint16_t(tr->isPartialAllowed()));
+    packet->append(tr->min_partial_amount());
 
     packet->sign(e.pubKey(), e.privKey());
 

@@ -107,6 +107,42 @@ Transaction::Transaction(const uint256                    & id,
     m_a.setMPubkey(mpubkey);
 }
 
+Transaction::Transaction(const uint256                    & id,
+                         const std::vector<unsigned char> & sourceAddr,
+                         const std::string                & sourceCurrency,
+                         const uint64_t                   & sourceAmount,
+                         const std::vector<unsigned char> & destAddr,
+                         const std::string                & destCurrency,
+                         const uint64_t                   & destAmount,
+                         const uint64_t                   & created,
+                         const uint256                    & blockHash,
+                         const std::vector<unsigned char> & mpubkey,
+                         const bool                       & partialAllowed,
+                         const bool                       & partialTx,
+                         const uint64_t                   & minFromAmount)
+    : m_id(id)
+    , m_created(xbridge::intToTime(created))
+    , m_last(boost::posix_time::microsec_clock::universal_time())
+    , m_lastUtxoCheck(boost::posix_time::microsec_clock::universal_time())
+    , m_blockHash(blockHash)
+    , m_state(trNew)
+    , m_a_stateChanged(false)
+    , m_b_stateChanged(false)
+    , m_confirmationCounter(0)
+    , m_sourceCurrency(sourceCurrency)
+    , m_destCurrency(destCurrency)
+    , m_sourceAmount(sourceAmount)
+    , m_destAmount(destAmount)
+    , m_a(id)
+    , m_partialAllowed(partialAllowed)
+    , m_partialTx(partialTx)
+    , m_minPartialAmount(minFromAmount)
+{
+    m_a.setSource(sourceAddr);
+    m_a.setDest(destAddr);
+    m_a.setMPubkey(mpubkey);
+}
+
 //*****************************************************************************
 //*****************************************************************************
 Transaction::~Transaction()
@@ -562,10 +598,11 @@ bool Transaction::tryJoin(const TransactionPtr other)
     
     if (m_partialAllowed && other->m_partialTx)
     {
-        double price = xBridgeValueFromAmount(m_destAmount) / xBridgeValueFromAmount(m_sourceAmount);
-        double otherPrice = xBridgeValueFromAmount(m_destAmount) / xBridgeValueFromAmount(m_sourceAmount);
+        double price = xBridgeValueFromAmount(m_sourceAmount) / xBridgeValueFromAmount(m_destAmount);
+        double otherPrice = xBridgeValueFromAmount(other->m_destAmount) / xBridgeValueFromAmount(other->m_sourceAmount);
+        uint64_t expectedDest = price * other->m_sourceAmount;
 
-        if ((price == 0 || (price != otherPrice)) && (price / m_destAmount) != m_sourceAmount) {
+        if ((price == 0 || (price != otherPrice)) && expectedDest != other->m_destAmount) {
             ERR() << "partial order price/amount mismatch. transaction not joined " << __FUNCTION__;
             return false;
         }
