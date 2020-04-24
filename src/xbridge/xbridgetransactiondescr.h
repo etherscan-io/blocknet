@@ -229,6 +229,11 @@ struct TransactionDescr
         return partialTransaction;
     }
 
+    bool isPartialRepost() {
+        LOCK(_lock);
+        return repostOrder;
+    }
+
     void setWatchBlock(const uint32_t block) {
         LOCK(_lock);
         if (watchStartBlock == 0)
