@@ -986,9 +986,6 @@ bool Session::Impl::processTransactionAccepting(XBridgePacketPtr packet) const
         }
     }
 
-    uint16_t isPartialOrderAllowed = *static_cast<uint16_t *>(static_cast<void *>(packet->data()+offset));
-    offset += sizeof(uint16_t);
-
     uint16_t isPartialTransaction = *static_cast<uint16_t *>(static_cast<void *>(packet->data()+offset));
     offset += sizeof(uint16_t);
 
@@ -1047,7 +1044,7 @@ bool Session::Impl::processTransactionAccepting(XBridgePacketPtr packet) const
 
     {
         if (e.acceptTransaction(id, saddr, scurrency, samount, daddr, dcurrency, damount, mpubkey, utxoItems, 
-            isPartialOrderAllowed, isPartialTransaction))
+            trPending->isPartialAllowed(), isPartialTransaction))
         {
             // check transaction state, if trNew - do nothing,
             // if trJoined = send hold to client
