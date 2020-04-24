@@ -1182,7 +1182,7 @@ UniValue dxTakePartialOrder(const JSONRPCRequest& request)
     if ((params.size() != 4) && (params.size() != 5))
     {
         return uret(xbridge::makeError(xbridge::INVALID_PARAMETERS, __FUNCTION__,
-                               "(id) (from_address) (to_address) (dryrun)[optional]"));
+                               "(id) (from_address) (to_address) (amount) (dryrun)[optional]"));
     }
 
     uint256 id = uint256S(params[0].get_str());
