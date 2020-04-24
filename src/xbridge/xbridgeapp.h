@@ -729,6 +729,13 @@ static CAmount availableBalance() {
     return balance;
 }
 
+/**
+ * Display the string representation of the enum.
+ * @param reason
+ * @return
+ */
+extern std::string TxCancelReasonText(uint32_t reason);
+
 } // namespace xbridge
 
 #endif // BLOCKNET_XBRIDGE_XBRIDGEAPP_H

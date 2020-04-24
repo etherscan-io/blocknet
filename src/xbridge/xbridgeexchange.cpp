@@ -315,7 +315,7 @@ bool Exchange::createTransaction(const uint256                        & txid,
 
     if (!haveConnectedWallet(sourceCurrency) || !haveConnectedWallet(destCurrency))
     {
-        LOG() << "no active wallet for transaction " << txid.ToString();
+        xbridge::LogOrderMsg(txid.GetHex(), "no active wallet for order", __FUNCTION__);
         return false;
     }
 
@@ -323,7 +323,7 @@ bool Exchange::createTransaction(const uint256                        & txid,
     if (!checkUtxoItems(txid, items))
     {
         // duplicate items
-        LOG() << "utxo check failed " << txid.ToString();
+        xbridge::LogOrderMsg(txid.GetHex(), "utxo check failed, duplicates detected", __FUNCTION__);
         return false;
     }
 
@@ -336,14 +336,12 @@ bool Exchange::createTransaction(const uint256                        & txid,
     {
         if (wp.dustAmount && wp.dustAmount > sourceAmount)
         {
-            LOG() << "tx " <<  txid.ToString()
-                  << " rejected because sourceAmount less than minimum payment";
+            xbridge::LogOrderMsg(txid.GetHex(), "rejected order because source currency amount less than minimum payment", __FUNCTION__);
             return false;
         }
         if (wp2.dustAmount && wp2.dustAmount > destAmount)
         {
-            LOG() << "tx " << txid.ToString()
-                  << " rejected because destAmount less than minimum payment";
+            xbridge::LogOrderMsg(txid.GetHex(), "rejected order because dest currency amount less than minimum payment", __FUNCTION__);
             return false;
         }
     }
@@ -362,15 +360,13 @@ bool Exchange::createTransaction(const uint256                        & txid,
                                                minFromAmount));
     if (!tr->isValid())
     {
-        LOG() << "created tx " <<  txid.ToString()
-              << " is not valid so rejected";
+        xbridge::LogOrderMsg(txid.GetHex(), "rejected order because it failed validity checks", __FUNCTION__);
         return false;
     }
 
     if(tr->isExpiredByBlockNumber())
     {
-        LOG() << "tx " <<  txid.ToString()
-              << " is expired by block number so rejected";
+        xbridge::LogOrderMsg(txid.GetHex(), "rejected order because it has expired (by block number)", __FUNCTION__);
         return false;
     }
 
@@ -431,15 +427,15 @@ bool Exchange::acceptTransaction(const uint256                        & txid,
 
     if (!haveConnectedWallet(sourceCurrency) || !haveConnectedWallet(destCurrency))
     {
-        LOG() << "no active wallet for transaction "
-              << xbridge::base64_encode(std::string((char *)txid.begin(), 32));
+        xbridge::LogOrderMsg(txid.GetHex(), "rejecting order because of a bad connector " +
+                                   (!haveConnectedWallet(sourceCurrency) ? sourceCurrency : destCurrency), __FUNCTION__);
         return false;
     }
 
     // check locked items
     if (!checkUtxoItems(txid, items))
     {
-        LOG() << "dx accept duplicate items " << __FUNCTION__;
+        xbridge::LogOrderMsg(txid.GetHex(), "rejecting order because duplicate utxos were detected", __FUNCTION__);
         // duplicate items
         return false;
     }
@@ -453,7 +449,7 @@ bool Exchange::acceptTransaction(const uint256                        & txid,
                                                isPartialOrderAllowed, isPartialTransaction));
     if (!tr->isValid())
     {
-        LOG() << "invalid transaction " << __FUNCTION__;
+        xbridge::LogOrderMsg(txid.GetHex(), "rejecting order because the transaction failed validity checks", __FUNCTION__);
         return false;
     }
 
@@ -471,7 +467,7 @@ bool Exchange::acceptTransaction(const uint256                        & txid,
 
         if (!m_p->m_pendingTransactions.count(txid))
         {
-            LOG() << "transaction not found " << __FUNCTION__;
+            xbridge::LogOrderMsg(txid.GetHex(), "rejecting order because it was not found", __FUNCTION__);
             // no pending
             return false;
         }
@@ -486,7 +482,7 @@ bool Exchange::acceptTransaction(const uint256                        & txid,
 
                 // if expired - delete old transaction
                 m_p->m_pendingTransactions.erase(txid);
-                LOG() << "try accept expired transaction " << __FUNCTION__;
+                xbridge::LogOrderMsg(txid.GetHex(), "rejecting order because it has expired", __FUNCTION__);
                 return false;
             }
             else
@@ -494,13 +490,13 @@ bool Exchange::acceptTransaction(const uint256                        & txid,
                 // try join with existing transaction
                 if (!m_p->m_pendingTransactions[txid]->tryJoin(tr))
                 {
-                    LOG() << "transaction not joined " << __FUNCTION__;
+                    xbridge::LogOrderMsg(txid.GetHex(), "rejecting order because counterparties have not joined", __FUNCTION__);
                     m_p->m_pendingTransactions[txid]->m_lock.unlock();
                     return false;
                 }
                 else
                 {
-                    LOG() << "transactions joined, id <" << tr->id().GetHex() << ">";
+                    xbridge::LogOrderMsg(tr->id().GetHex(), "joining counterparties on order", __FUNCTION__);
                     tmp = m_p->m_pendingTransactions[txid];
                 }
             }
@@ -550,7 +546,7 @@ bool Exchange::deletePendingTransaction(const uint256 & id)
 {
     LOCK(m_p->m_pendingTransactionsLock);
 
-    LOG() << "delete pending transaction <" << id.GetHex() << ">";
+    xbridge::LogOrderMsg(id.GetHex(), "delete pending order and unlock utxos", __FUNCTION__);
 
     // if there are any locked utxo's for this txid, unlock them
     unlockUtxos(id);
@@ -566,7 +562,7 @@ bool Exchange::deleteTransaction(const uint256 & txid)
 {
     LOCK(m_p->m_transactionsLock);
 
-    LOG() << "delete transaction <" << txid.GetHex() << ">";
+    xbridge::LogOrderMsg(txid.GetHex(), "deleting order", __FUNCTION__);
 
     m_p->m_transactions.erase(txid);
 
@@ -597,7 +593,7 @@ bool Exchange::updateTransactionWhenInitializedReceived(const TransactionPtr &tx
     if (!tx->setKeys(from, pk))
     {
         // wtf?
-        LOG() << "unknown sender address for transaction, id <" << tx->id().GetHex() << ">";
+        xbridge::LogOrderMsg(tx->id().GetHex(), "unknown sender address for order", __FUNCTION__);
         return false;
     }
 
@@ -618,7 +614,7 @@ bool Exchange::updateTransactionWhenCreatedReceived(const TransactionPtr & tx,
     if (!tx->setBinTxId(from, binTxId))
     {
         // wtf?
-        LOG() << "unknown sender address for transaction, id <" << tx->id().GetHex() << ">";
+        xbridge::LogOrderMsg(tx->id().GetHex(), "unknown sender address for order", __FUNCTION__);
         return false;
     }
 
@@ -655,11 +651,6 @@ const TransactionPtr Exchange::transaction(const uint256 & hash)
         {
             return m_p->m_transactions[hash];
         }
-        else
-        {
-            // unknown transaction
-            LOG() << "unknown transaction, id <" << hash.GetHex() << ">";
-        }
     }
 
     return TransactionPtr(new xbridge::Transaction);
@@ -675,11 +666,6 @@ const TransactionPtr Exchange::pendingTransaction(const uint256 & hash)
         if (m_p->m_pendingTransactions.count(hash))
         {
             return m_p->m_pendingTransactions[hash];
-        }
-        else
-        {
-            // unknown transaction
-            LOG() << "unknown pending transaction, id <" << hash.GetHex() << ">";
         }
     }
 
@@ -763,14 +749,14 @@ size_t Exchange::eraseExpiredTransactions()
 
         if (ptr->isExpiredByBlockNumber())
         {
-             LOG() << __FUNCTION__ << std::endl << "order block expired" << ptr;
+            xbridge::LogOrderMsg(ptr->id().GetHex(), "order expired by block number", __FUNCTION__);
              m_p->m_pendingTransactions.erase(it++);
              unlockUtxos(ptr->id());
              ++result;
          }
         else if(ptr->isExpired())
         {
-            LOG() << __FUNCTION__ << std::endl << "order expired by ttl" << ptr;
+            xbridge::LogOrderMsg(ptr->id().GetHex(), "order expired by ttl", __FUNCTION__);
             m_p->m_pendingTransactions.erase(it++);
             unlockUtxos(ptr->id());
             ++result;
@@ -778,9 +764,6 @@ size_t Exchange::eraseExpiredTransactions()
             ++it;
         }
     }
-
-    if(result > 0)
-        LOG() << "deleted " << result << "  expired transactions";
 
     return result;
 }
@@ -876,7 +859,7 @@ bool Exchange::makerUtxosAreStillValid(const TransactionPtr & tx)
         return true; // Only update at most every N seconds (default 15 minutes)
     tx->updateUtxoCheckTime(current);
 
-    LOG() << "running automated maker utxo check on order " << tx->id().ToString() << " " << __FUNCTION__;
+    xbridge::LogOrderMsg(tx->id().GetHex(), "running automated maker utxo check on order", __FUNCTION__);
 
     WalletConnectorPtr makerConn = ConnectorByCurrency(tx->a_currency());
     if (!makerConn) // non-fatal just skip
@@ -886,8 +869,11 @@ bool Exchange::makerUtxosAreStillValid(const TransactionPtr & tx)
     for (auto entry : makerUtxos) {
         if (!makerConn->getTxOut(entry)) {
             // Invalid utxos cancel order
-            ERR() << "bad maker utxo in order " << tx->id().ToString() << " , utxo txid " << entry.txId << " vout " << entry.vout
-                  << " " << __FUNCTION__;
+            UniValue log_obj(UniValue::VOBJ);
+            log_obj.pushKV("orderid", tx->id().GetHex());
+            log_obj.pushKV("utxo_txid", entry.txId);
+            log_obj.pushKV("utxo_vout", static_cast<int>(entry.vout));
+            xbridge::LogOrderMsg(log_obj, "bad maker utxo in order", __FUNCTION__);
             return false;
         }
     }
