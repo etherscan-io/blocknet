@@ -3436,6 +3436,28 @@ bool Session::Impl::processTransactionFinished(XBridgePacketPtr packet) const
     // update transaction state for gui
     xtx->state = TransactionDescr::trFinished;
 
+    if (xtx->isLocal() && xtx->repostOrder)
+    {
+        uint256 id = uint256();
+        uint256 blockHash = uint256();
+
+        uint64_t fromAmount = (xtx->origFromAmount - xtx->fromAmount);
+        uint64_t toAmount = (xtx->origToAmount - xtx->toAmount);
+
+        uint64_t partialMinimum = xtx->minFromAmount;
+
+        auto statusCode = xapp.checkCreateParams(xtx->fromCurrency, xtx->toCurrency, fromAmount, xtx->fromAddr);
+
+        if (!xtx->reposted && (statusCode == xbridge::SUCCESS && fromAmount >= partialMinimum)) {
+            xtx->reposted = true;
+            
+            xapp.sendXBridgeTransaction
+              (xtx->fromAddr, xtx->fromCurrency, fromAmount, xtx->toAddr, 
+               xtx->toCurrency, toAmount, true, true, xtx->minFromAmount, 
+               id, blockHash);
+        }
+    }
+
     LogOrderMsg(xtx, __FUNCTION__);
 
     xapp.moveTransactionToHistory(txid);

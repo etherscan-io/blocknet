@@ -791,6 +791,7 @@ UniValue dxMakePartialOrder(const JSONRPCRequest& request)
                     {"taker_size", RPCArg::Type::STR, RPCArg::Optional::NO, "The amount of the taker token to be received."},
                     {"taker_address", RPCArg::Type::STR, RPCArg::Optional::NO, "The taker address for the receiving token."},
                     {"partial_minimum", RPCArg::Type::STR, RPCArg::Optional::NO, "The minimum amount of maker token to sell."},
+                    {"repost", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "Repost partial order remainder after taken. Options: true/false"},
                     {"dryrun", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "Simulate the order submission without actually submitting the order, i.e. a test run. Options: dryrun"},
                 },
                 RPCResult{
@@ -799,18 +800,21 @@ UniValue dxMakePartialOrder(const JSONRPCRequest& request)
                 RPCExamples{
                     HelpExampleCli("dxMakePartialOrder", "LTC 25 LLZ1pgb6Jqx8hu84fcr5WC5HMoKRUsRE8H BLOCK 1000 BWQrvmuHB4C68KH5V7fcn9bFtWN8y5hBmR 5")
                   + HelpExampleRpc("dxMakePartialOrder", "\"LTC\", \"25\", \"LLZ1pgb6Jqx8hu84fcr5WC5HMoKRUsRE8H\", \"BLOCK\", \"1000\", \"BWQrvmuHB4C68KH5V7fcn9bFtWN8y5hBmR\", \"5\"")
-                  + HelpExampleCli("dxMakePartialOrder", "LTC 25 LLZ1pgb6Jqx8hu84fcr5WC5HMoKRUsRE8H BLOCK 1000 BWQrvmuHB4C68KH5V7fcn9bFtWN8y5hBmR 5 dryrun")
-                  + HelpExampleRpc("dxMakePartialOrder", "\"LTC\", \"25\", \"LLZ1pgb6Jqx8hu84fcr5WC5HMoKRUsRE8H\", \"BLOCK\", \"1000\", \"BWQrvmuHB4C68KH5V7fcn9bFtWN8y5hBmR\", \"5\", \"dryrun\"")
+                  + HelpExampleCli("dxMakePartialOrder", "LTC 25 LLZ1pgb6Jqx8hu84fcr5WC5HMoKRUsRE8H BLOCK 1000 BWQrvmuHB4C68KH5V7fcn9bFtWN8y5hBmR 5 true dryrun")
+                  + HelpExampleRpc("dxMakePartialOrder", "\"LTC\", \"25\", \"LLZ1pgb6Jqx8hu84fcr5WC5HMoKRUsRE8H\", \"BLOCK\", \"1000\", \"BWQrvmuHB4C68KH5V7fcn9bFtWN8y5hBmR\", \"5\", \"true\", \"dryrun\"")
                 },
             }.ToString());
     Value js; json_spirit::read_string(request.params.write(), js); Array params = js.get_array();
 
     if (params.size() < 7) {
         throw runtime_error("dxMakePartialOrder (maker) (maker size) (maker address) (taker) (taker size)\n"
-                            "(taker address) (partial_minimum) (dryrun)[optional]\n"
+                            "(taker address) (partial_minimum) (repost)[optional] (dryrun)[optional]\n"
                             "Create a new order. You can only create orders for markets with tokens\n"
-                            "supported by your node. There are no fees to make orders. [dryrun] will\n"
-                            "validate the order without submitting the order to the network (test run).");
+                            "supported by your node. There are no fees to make orders. After an order\n"
+                            "is taken partially, the fully taken and partially taken increments are\n"
+                            "sent to P2SH and the remaining increments are reposted at the same exchange\n"
+                            "rate (if [repost] = true) [dryrun] will validate the order without submitting\n"
+                            "the order to the network (test run).");
     }
 
     if (!xbridge::xBridgeValidCoin(params[1].get_str())) {
@@ -904,10 +908,15 @@ UniValue dxMakePartialOrder(const JSONRPCRequest& request)
                    "The partial_minimum must be greater than 0."));
     }
 
+    bool repost = false;
+    if (params.size() >= 8) {
+        repost = params[7].get_str() == "true";
+    }
+
     // Perform explicit check on dryrun to avoid executing order on bad spelling
     bool dryrun = false;
-    if (params.size() == 8) {
-        std::string dryrunParam = params[7].get_str();
+    if (params.size() == 9) {
+        std::string dryrunParam = params[8].get_str();
         if (dryrunParam != "dryrun") {
             return uret(xbridge::makeError(xbridge::INVALID_PARAMETERS, __FUNCTION__, dryrunParam));
         }
@@ -932,7 +941,8 @@ UniValue dxMakePartialOrder(const JSONRPCRequest& request)
                                      xbridge::xBridgeStringValueFromAmount(xbridge::xBridgeAmountFromReal(toAmount))));
             result.emplace_back(Pair("taker_address", toAddress));
             result.emplace_back(Pair("partial_order", true));
-            result.emplace_back(Pair("partial_minimum",  partialMinimum));
+            result.emplace_back(Pair("partial_minimum", partialMinimum));
+            result.emplace_back(Pair("partial_repost",  repost));
             result.emplace_back(Pair("status", "created"));
             return uret(result);
         }
@@ -958,8 +968,8 @@ UniValue dxMakePartialOrder(const JSONRPCRequest& request)
     uint256 blockHash = uint256();
     statusCode = xbridge::App::instance().sendXBridgeTransaction
           (fromAddress, fromCurrency, xbridge::xBridgeAmountFromReal(fromAmount),
-           toAddress, toCurrency, xbridge::xBridgeAmountFromReal(toAmount), true, 
-           xbridge::xBridgeAmountFromReal(partialMinimum), id, blockHash);
+           toAddress, toCurrency, xbridge::xBridgeAmountFromReal(toAmount), true,
+           repost, xbridge::xBridgeAmountFromReal(partialMinimum), id, blockHash);
 
     if (statusCode == xbridge::SUCCESS) {
         Object obj;
@@ -976,6 +986,7 @@ UniValue dxMakePartialOrder(const JSONRPCRequest& request)
         obj.emplace_back(Pair("block_id",         blockHash.GetHex()));
         obj.emplace_back(Pair("partial_order",    true));
         obj.emplace_back(Pair("partial_minimum",  partialMinimum));
+        obj.emplace_back(Pair("partial_repost",   repost));
         obj.emplace_back(Pair("status",           "created"));
         return uret(obj);
 

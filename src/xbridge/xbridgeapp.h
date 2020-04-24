@@ -254,6 +254,7 @@ public:
                                  const std::string & toCurrency,
                                  const uint64_t & toAmount,
                                  const bool & partialOrder,
+                                 const bool & repostOrder,
                                  const uint64_t & partialMinimum,
                                  uint256 & id,
                                  uint256& blockHash);
