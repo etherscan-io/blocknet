@@ -3446,6 +3446,10 @@ std::ostream & operator << (std::ostream& out, const TransactionDescrPtr& tx)
     log_obj.pushKV("taker", tx->toCurrency);
     log_obj.pushKV("taker_size", xBridgeStringValueFromAmount(tx->toAmount));
     log_obj.pushKV("taker_addr", (!tx->to.empty() && connTo ? connTo->fromXAddr(tx->to) : ""));
+    log_obj.pushKV("partial_allowed", tx->isPartialOrderAllowed());
+    log_obj.pushKV("partial_tx", tx->isPartialTransaction());
+    log_obj.pushKV("partial_repost", tx->isPartialRepost());
+    log_obj.pushKV("partial_minimum", tx->minFromAmount);
     log_obj.pushKV("state", tx->strState());
     log_obj.pushKV("block_hash", tx->blockHash.GetHex());
     log_obj.pushKV("updated_at", iso8601(tx->txtime));
@@ -3460,20 +3464,6 @@ std::ostream & operator << (std::ostream& out, const TransactionDescrPtr& tx)
 
 WalletConnectorPtr ConnectorByCurrency(const std::string & currency) {
     return App::instance().connectorByCurrency(currency);
-}
-
-//******************************************************************************
-//******************************************************************************
-xbridge::Error App::sendXBridgeTransaction(const std::string & from,
-                                           const std::string & fromCurrency,
-                                           const uint64_t & fromAmount,
-                                           const std::string & to,
-                                           const std::string & toCurrency,
-                                           const uint64_t & toAmount,
-                                           uint256 & id,
-                                           uint256 & blockHash)
-{
-    return sendXBridgeTransaction(from, fromCurrency, fromAmount, to, toCurrency, toAmount, false, false, 0, id, blockHash);
 }
 
 std::string TxCancelReasonText(uint32_t reason) {
@@ -3531,6 +3521,20 @@ std::string TxCancelReasonText(uint32_t reason) {
         default:
             return "crNone";
     }
+}
+
+//******************************************************************************
+//******************************************************************************
+xbridge::Error App::sendXBridgeTransaction(const std::string & from,
+                                           const std::string & fromCurrency,
+                                           const uint64_t & fromAmount,
+                                           const std::string & to,
+                                           const std::string & toCurrency,
+                                           const uint64_t & toAmount,
+                                           uint256 & id,
+                                           uint256 & blockHash)
+{
+    return sendXBridgeTransaction(from, fromCurrency, fromAmount, to, toCurrency, toAmount, false, false, 0, id, blockHash);
 }
 
 } // namespace xbridge
