@@ -2328,7 +2328,6 @@ bool App::Impl::sendAcceptingTransaction(const TransactionDescrPtr & ptr)
         packet->append(entry.signature);
     }
 
-    packet->append(uint16_t(ptr->isPartialOrderAllowed()));
     packet->append(uint16_t(ptr->isPartialTransaction()));
 
     packet->sign(ptr->mPubKey, ptr->mPrivKey);
