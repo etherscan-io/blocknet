@@ -140,8 +140,14 @@ struct TransactionDescr
     // is partial transaction
     bool     partialTransaction{false};
 
+    // repost partial order after completion
+    bool     repostOrder{false};
+    bool     reposted{false};
+
     // partial order amounts
     uint64_t minFromAmount;
+    uint64_t origFromAmount;
+    uint64_t origToAmount;
 
     // keep track of excluded servicenodes (snodes can be excluded if they fail to post)
     std::set<CPubKey> _excludedSnodes;

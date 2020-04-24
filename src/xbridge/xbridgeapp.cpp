@@ -1363,6 +1363,7 @@ xbridge::Error App::sendXBridgeTransaction(const std::string & from,
                                            const std::string & toCurrency,
                                            const uint64_t & toAmount,
                                            const bool & partialOrder,
+                                           const bool & repostOrder,
                                            const uint64_t & partialMinimum,
                                            uint256 & id,
                                            uint256 & blockHash)
@@ -1530,22 +1531,25 @@ xbridge::Error App::sendXBridgeTransaction(const std::string & from,
        << firstUtxoSig;
     id = ss.GetHash();
 
-    ptr->hubAddress    = snodeAddress;
-    ptr->sPubKey       = sPubKey;
-    ptr->created       = timestamp;
-    ptr->txtime        = timestamp;
-    ptr->id            = id;
-    ptr->fromAddr      = from;
-    ptr->from          = connFrom->toXAddr(from);
-    ptr->fromCurrency  = fromCurrency;
-    ptr->fromAmount    = fromAmount;
-    ptr->toAddr        = to;
-    ptr->to            = connTo->toXAddr(to);
-    ptr->toCurrency    = toCurrency;
-    ptr->toAmount      = toAmount;
-    ptr->blockHash     = blockHash;
-    ptr->role          = 'A';
-    ptr->minFromAmount = (partialOrder ? partialMinimum : fromAmount);
+    ptr->hubAddress     = snodeAddress;
+    ptr->sPubKey        = sPubKey;
+    ptr->created        = timestamp;
+    ptr->txtime         = timestamp;
+    ptr->id             = id;
+    ptr->fromAddr       = from;
+    ptr->from           = connFrom->toXAddr(from);
+    ptr->fromCurrency   = fromCurrency;
+    ptr->fromAmount     = fromAmount;
+    ptr->toAddr         = to;
+    ptr->to             = connTo->toXAddr(to);
+    ptr->toCurrency     = toCurrency;
+    ptr->toAmount       = toAmount;
+    ptr->blockHash      = blockHash;
+    ptr->role           = 'A';
+    ptr->minFromAmount  = (partialOrder ? partialMinimum : fromAmount);
+    ptr->repostOrder    = repostOrder;
+    ptr->origFromAmount = fromAmount;
+    ptr->origToAmount   = toAmount;
 
     if (partialOrder)
         ptr->allowPartialOrders();
@@ -3459,7 +3463,7 @@ xbridge::Error App::sendXBridgeTransaction(const std::string & from,
                                            uint256 & id,
                                            uint256 & blockHash)
 {
-    return sendXBridgeTransaction(from, fromCurrency, fromAmount, to, toCurrency, toAmount, false, 0, id, blockHash);
+    return sendXBridgeTransaction(from, fromCurrency, fromAmount, to, toCurrency, toAmount, false, false, 0, id, blockHash);
 }
 
 } // namespace xbridge
